@@ -53,7 +53,7 @@
 	border-top-right-radius: 4px;
     font-size: 12px;
 }
-
+.ui-tabs .ui-tabs-nav li.ui-tabs-active a,
 .ui-tabs .ui-tabs-nav li.ui-tabs-selected a{
     background: #7CA0C7 repeat-x;
     color: #fff;

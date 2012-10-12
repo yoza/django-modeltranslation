@@ -29,10 +29,12 @@ var google, django, gettext;
              * }
              */
             var translation_fields = $('.modeltranslation').filter(
-                'input[type=text]:visible, textarea:visible').filter(
+                'input[type=text], textarea').filter(
                 ':parents(.tabular)'), // exclude tabular inlines
               grouped_translations = {};
-
+            /* FIXME was .filter('input[type=text]:visible, textarea:visible') 11oct2012 
+                filter visible not working for expandable StackedInline
+            */
             translation_fields.each(function (i, el) {
                 /*
                 // FIXME: Fails if there's an inline which has the same field name as
