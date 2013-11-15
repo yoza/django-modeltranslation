@@ -16,7 +16,7 @@ from django.core.management import call_command
 from django.db import IntegrityError
 from django.db.models import Q, F
 from django.db.models.loading import AppCache
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import override_settings
 from django.utils import six
 from django.utils.translation import get_language, override, trans_real
@@ -38,7 +38,7 @@ from modeltranslation.utils import (build_css_class, build_localized_fieldname,
 request = None
 
 # How many models are registered for tests.
-TEST_MODELS = 26
+TEST_MODELS = 27
 
 
 class reload_override_settings(override_settings):
@@ -59,7 +59,7 @@ def default_fallback():
 
 
 @override_settings(**TEST_SETTINGS)
-class ModeltranslationTestBase(TestCase):
+class ModeltranslationTransactionTestBase(TransactionTestCase):
     urls = 'modeltranslation.tests.urls'
     cache = AppCache()
     synced = False
@@ -71,7 +71,7 @@ class ModeltranslationTestBase(TestCase):
         * Call syncdb to create tables for tests.models (since during
         default testrunner's db creation modeltranslation.tests was not in INSTALLED_APPS
         """
-        super(ModeltranslationTestBase, cls).setUpClass()
+        super(ModeltranslationTransactionTestBase, cls).setUpClass()
         if not ModeltranslationTestBase.synced:
             # In order to perform only one syncdb
             ModeltranslationTestBase.synced = True
@@ -110,6 +110,10 @@ class ModeltranslationTestBase(TestCase):
 
     def tearDown(self):
         trans_real.activate(self._old_language)
+
+
+class ModeltranslationTestBase(ModeltranslationTransactionTestBase, TestCase):
+    pass
 
 
 class TestAutodiscover(ModeltranslationTestBase):
@@ -450,7 +454,10 @@ class ModeltranslationTest(ModeltranslationTestBase):
         )
         self._test_constructor(keywords)
 
+
+class ModeltranslationTransactionTest(ModeltranslationTransactionTestBase):
     def test_unique_nullable_field(self):
+        from django.db import transaction
         models.UniqueNullableModel.objects.create()
         models.UniqueNullableModel.objects.create()
         models.UniqueNullableModel.objects.create(title=None)
@@ -458,8 +465,10 @@ class ModeltranslationTest(ModeltranslationTestBase):
 
         models.UniqueNullableModel.objects.create(title='')
         self.assertRaises(IntegrityError, models.UniqueNullableModel.objects.create, title='')
+        transaction.rollback()  # Postgres
         models.UniqueNullableModel.objects.create(title='foo')
         self.assertRaises(IntegrityError, models.UniqueNullableModel.objects.create, title='foo')
+        transaction.rollback()  # Postgres
 
 
 class FallbackTests(ModeltranslationTestBase):
@@ -662,18 +671,54 @@ class FileFieldsTest(ModeltranslationTestBase):
         inst.file_de.delete()
         inst.image_de.delete()
 
+    def test_empty_field(self):
+        from django.db.models.fields.files import FieldFile
+        inst = models.FileFieldsModel()
+        self.assertIsInstance(inst.file, FieldFile)
+        self.assertIsInstance(inst.file2, FieldFile)
+        inst.save()
+        inst = models.FileFieldsModel.objects.all()[0]
+        self.assertIsInstance(inst.file, FieldFile)
+        self.assertIsInstance(inst.file2, FieldFile)
+
+    def test_fallback(self):
+        from django.db.models.fields.files import FieldFile
+        with reload_override_settings(MODELTRANSLATION_FALLBACK_LANGUAGES=('en',)):
+            self.assertEqual(get_language(), 'de')
+            inst = models.FileFieldsModel()
+            inst.file_de = ''
+            inst.file_en = 'foo'
+            inst.file2_de = ''
+            inst.file2_en = 'bar'
+            self.assertIsInstance(inst.file, FieldFile)
+            self.assertIsInstance(inst.file2, FieldFile)
+            self.assertEqual(inst.file.name, 'foo')
+            self.assertEqual(inst.file2.name, 'bar')
+            inst.save()
+            inst = models.FileFieldsModel.objects.all()[0]
+            self.assertIsInstance(inst.file, FieldFile)
+            self.assertIsInstance(inst.file2, FieldFile)
+            self.assertEqual(inst.file.name, 'foo')
+            self.assertEqual(inst.file2.name, 'bar')
+
 
 class ForeignKeyFieldsTest(ModeltranslationTestBase):
+    @classmethod
+    def setUpClass(cls):
+        # 'model' attribute cannot be assigned to class in its definition,
+        # because ``models`` module will be reloaded and hence class would use old model classes.
+        super(ForeignKeyFieldsTest, cls).setUpClass()
+        cls.model = models.ForeignKeyModel
 
     def test_translated_models(self):
-        field_names = dir(models.ForeignKeyModel())
+        field_names = dir(self.model())
         self.assertTrue('id' in field_names)
         for f in ('test', 'test_de', 'test_en', 'optional', 'optional_en', 'optional_de'):
             self.assertTrue(f in field_names)
             self.assertTrue('%s_id' % f in field_names)
 
     def test_db_column_names(self):
-        meta = models.ForeignKeyModel._meta
+        meta = self.model._meta
 
         # Make sure the correct database columns always get used:
         attname, col = meta.get_field('test').get_attname_column()
@@ -693,7 +738,7 @@ class ForeignKeyFieldsTest(ModeltranslationTestBase):
         test_inst1.save()
         test_inst2 = models.TestModel(title_en='title2_en', title_de='title2_de')
         test_inst2.save()
-        inst = models.ForeignKeyModel()
+        inst = self.model()
 
         trans_real.activate("de")
         inst.test = test_inst1
@@ -724,11 +769,16 @@ class ForeignKeyFieldsTest(ModeltranslationTestBase):
         self.assertEqual(inst.optional_en_id, test_inst2.pk)
         self.assertEqual(inst.optional_en.title, 'title2_en')
 
-        # Check filtering in direct way + lookup spanning
+        # Test caching
         inst.test_en = test_inst2
         inst.save()
-        manager = models.ForeignKeyModel.objects
+        trans_real.activate("de")
+        self.assertEqual(inst.test, test_inst1)
+        trans_real.activate("en")
+        self.assertEqual(inst.test, test_inst2)
 
+        # Check filtering in direct way + lookup spanning
+        manager = self.model.objects
         trans_real.activate("de")
         self.assertEqual(manager.filter(test=test_inst1).count(), 1)
         self.assertEqual(manager.filter(test_en=test_inst1).count(), 0)
@@ -755,18 +805,18 @@ class ForeignKeyFieldsTest(ModeltranslationTestBase):
         test_inst.save()
 
         # Instantiate many 'ForeignKeyModel' instances:
-        fk_inst_both = models.ForeignKeyModel(title_en='f_title_en', title_de='f_title_de',
-                                              test_de=test_inst, test_en=test_inst)
+        fk_inst_both = self.model(title_en='f_title_en', title_de='f_title_de',
+                                  test_de=test_inst, test_en=test_inst)
         fk_inst_both.save()
-        fk_inst_de = models.ForeignKeyModel(title_en='f_title_en', title_de='f_title_de',
-                                            test_de_id=test_inst.pk)
+        fk_inst_de = self.model(title_en='f_title_en', title_de='f_title_de',
+                                test_de_id=test_inst.pk)
         fk_inst_de.save()
-        fk_inst_en = models.ForeignKeyModel(title_en='f_title_en', title_de='f_title_de',
-                                            test_en=test_inst)
+        fk_inst_en = self.model(title_en='f_title_en', title_de='f_title_de',
+                                test_en=test_inst)
         fk_inst_en.save()
 
-        fk_option_de = models.ForeignKeyModel.objects.create(optional_de=test_inst)
-        fk_option_en = models.ForeignKeyModel.objects.create(optional_en=test_inst)
+        fk_option_de = self.model.objects.create(optional_de=test_inst)
+        fk_option_en = self.model.objects.create(optional_en=test_inst)
 
         # Check that the reverse accessors are created on the model:
         # Explicit related_name
@@ -858,13 +908,13 @@ class ForeignKeyFieldsTest(ModeltranslationTestBase):
         non_de = models.NonTranslated.objects.create(title='title_de')
         non_en = models.NonTranslated.objects.create(title='title_en')
 
-        fk_inst_both = models.ForeignKeyModel.objects.create(
+        fk_inst_both = self.model.objects.create(
             title_en='f_title_en', title_de='f_title_de', non_de=non_de, non_en=non_en)
-        fk_inst_de = models.ForeignKeyModel.objects.create(non_de=non_de)
-        fk_inst_en = models.ForeignKeyModel.objects.create(non_en=non_en)
+        fk_inst_de = self.model.objects.create(non_de=non_de)
+        fk_inst_en = self.model.objects.create(non_en=non_en)
 
         # Forward relation + spanning
-        manager = models.ForeignKeyModel.objects
+        manager = self.model.objects
         trans_real.activate("de")
         self.assertEqual(manager.filter(non=non_de).count(), 2)
         self.assertEqual(manager.filter(non=non_en).count(), 0)
@@ -902,6 +952,167 @@ class ForeignKeyFieldsTest(ModeltranslationTestBase):
     def assertQuerysetsEqual(self, qs1, qs2):
         pk = lambda o: o.pk
         return self.assertEqual(sorted(qs1, key=pk), sorted(qs2, key=pk))
+
+
+class OneToOneFieldsTest(ForeignKeyFieldsTest):
+    @classmethod
+    def setUpClass(cls):
+        # 'model' attribute cannot be assigned to class in its definition,
+        # because ``models`` module will be reloaded and hence class would use old model classes.
+        super(OneToOneFieldsTest, cls).setUpClass()
+        cls.model = models.OneToOneFieldModel
+
+    def test_uniqueness(self):
+        test_inst1 = models.TestModel(title_en='title1_en', title_de='title1_de')
+        test_inst1.save()
+        inst = self.model()
+
+        trans_real.activate("de")
+        inst.test = test_inst1
+
+        trans_real.activate("en")
+        # That's ok, since test_en is different than test_de
+        inst.test = test_inst1
+        inst.save()
+
+        # But this violates uniqueness constraint
+        inst2 = self.model(test=test_inst1)
+        self.assertRaises(IntegrityError, inst2.save)
+
+    def test_reverse_relations(self):
+        test_inst = models.TestModel(title_en='title_en', title_de='title_de')
+        test_inst.save()
+
+        # Instantiate many 'OneToOneFieldModel' instances:
+        fk_inst_de = self.model(title_en='f_title_en', title_de='f_title_de',
+                                test_de_id=test_inst.pk)
+        fk_inst_de.save()
+        fk_inst_en = self.model(title_en='f_title_en', title_de='f_title_de',
+                                test_en=test_inst)
+        fk_inst_en.save()
+
+        fk_option_de = self.model.objects.create(optional_de=test_inst)
+        fk_option_en = self.model.objects.create(optional_en=test_inst)
+
+        # Check that the reverse accessors are created on the model:
+        # Explicit related_name
+        testmodel_fields = models.TestModel._meta.get_all_field_names()
+        testmodel_methods = dir(models.TestModel)
+        self.assertIn('test_o2o',    testmodel_fields)
+        self.assertIn('test_o2o_de', testmodel_fields)
+        self.assertIn('test_o2o_en', testmodel_fields)
+        self.assertIn('test_o2o',    testmodel_methods)
+        self.assertIn('test_o2o_de', testmodel_methods)
+        self.assertIn('test_o2o_en', testmodel_methods)
+        # Implicit related_name
+        self.assertIn('onetoonefieldmodel',    testmodel_fields)
+        self.assertIn('onetoonefieldmodel_de', testmodel_fields)
+        self.assertIn('onetoonefieldmodel_en', testmodel_fields)
+        self.assertIn('onetoonefieldmodel',    testmodel_methods)
+        self.assertIn('onetoonefieldmodel_de', testmodel_methods)
+        self.assertIn('onetoonefieldmodel_en', testmodel_methods)
+
+        # Check the German reverse accessor:
+        self.assertEqual(fk_inst_de, test_inst.test_o2o_de)
+
+        # Check the English reverse accessor:
+        self.assertEqual(fk_inst_en, test_inst.test_o2o_en)
+
+        # Check the default reverse accessor:
+        trans_real.activate("de")
+        self.assertEqual(fk_inst_de, test_inst.test_o2o)
+        trans_real.activate("en")
+        self.assertEqual(fk_inst_en, test_inst.test_o2o)
+
+        # Check implicit related_name reverse accessor:
+        self.assertEqual(fk_option_en, test_inst.onetoonefieldmodel)
+
+        # Check filtering in reverse way + lookup spanning:
+        manager = models.TestModel.objects
+        trans_real.activate("de")
+        self.assertEqual(manager.filter(test_o2o=fk_inst_de).count(), 1)
+        self.assertEqual(manager.filter(test_o2o__id=fk_inst_de.pk).count(), 1)
+        self.assertEqual(manager.filter(test_o2o=fk_inst_en).count(), 0)
+        self.assertEqual(manager.filter(test_o2o_en=fk_inst_en).count(), 1)
+        self.assertEqual(manager.filter(onetoonefieldmodel=fk_option_de).count(), 1)
+        self.assertEqual(manager.filter(onetoonefieldmodel=fk_option_en).count(), 0)
+        self.assertEqual(manager.filter(onetoonefieldmodel_en=fk_option_en).count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_de').distinct().count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_en').distinct().count(), 0)
+        self.assertEqual(manager.filter(test_o2o__title_en='f_title_en').distinct().count(), 1)
+        trans_real.activate("en")
+        self.assertEqual(manager.filter(test_o2o=fk_inst_en).count(), 1)
+        self.assertEqual(manager.filter(test_o2o__id=fk_inst_en.pk).count(), 1)
+        self.assertEqual(manager.filter(test_o2o=fk_inst_de).count(), 0)
+        self.assertEqual(manager.filter(test_o2o_de=fk_inst_de).count(), 1)
+        self.assertEqual(manager.filter(onetoonefieldmodel=fk_option_en).count(), 1)
+        self.assertEqual(manager.filter(onetoonefieldmodel=fk_option_de).count(), 0)
+        self.assertEqual(manager.filter(onetoonefieldmodel_de=fk_option_de).count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_en').distinct().count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_de').distinct().count(), 0)
+        self.assertEqual(manager.filter(test_o2o__title_de='f_title_de').distinct().count(), 1)
+
+        # Check assignment
+        trans_real.activate("de")
+        test_inst2 = models.TestModel(title_en='title_en', title_de='title_de')
+        test_inst2.save()
+        test_inst2.test_o2o = fk_inst_de
+        test_inst2.test_o2o_en = fk_inst_en
+
+        self.assertEqual(fk_inst_de.test.pk, test_inst2.pk)
+        self.assertEqual(fk_inst_de.test_id, test_inst2.pk)
+        self.assertEqual(fk_inst_de.test_de, test_inst2)
+        self.assertEqual(test_inst2.test_o2o_de, test_inst2.test_o2o)
+        self.assertEqual(fk_inst_de, test_inst2.test_o2o)
+        trans_real.activate("en")
+        self.assertEqual(fk_inst_en.test.pk, test_inst2.pk)
+        self.assertEqual(fk_inst_en.test_id, test_inst2.pk)
+        self.assertEqual(fk_inst_en.test_en, test_inst2)
+        self.assertEqual(test_inst2.test_o2o_en, test_inst2.test_o2o)
+        self.assertEqual(fk_inst_en, test_inst2.test_o2o)
+
+    def test_non_translated_relation(self):
+        non_de = models.NonTranslated.objects.create(title='title_de')
+        non_en = models.NonTranslated.objects.create(title='title_en')
+
+        fk_inst_de = self.model.objects.create(
+            title_en='f_title_en', title_de='f_title_de', non_de=non_de)
+        fk_inst_en = self.model.objects.create(
+            title_en='f_title_en2', title_de='f_title_de2', non_en=non_en)
+
+        # Forward relation + spanning
+        manager = self.model.objects
+        trans_real.activate("de")
+        self.assertEqual(manager.filter(non=non_de).count(), 1)
+        self.assertEqual(manager.filter(non=non_en).count(), 0)
+        self.assertEqual(manager.filter(non_en=non_en).count(), 1)
+        self.assertEqual(manager.filter(non__title='title_de').count(), 1)
+        self.assertEqual(manager.filter(non__title='title_en').count(), 0)
+        self.assertEqual(manager.filter(non_en__title='title_en').count(), 1)
+        trans_real.activate("en")
+        self.assertEqual(manager.filter(non=non_en).count(), 1)
+        self.assertEqual(manager.filter(non=non_de).count(), 0)
+        self.assertEqual(manager.filter(non_de=non_de).count(), 1)
+        self.assertEqual(manager.filter(non__title='title_en').count(), 1)
+        self.assertEqual(manager.filter(non__title='title_de').count(), 0)
+        self.assertEqual(manager.filter(non_de__title='title_de').count(), 1)
+
+        # Reverse relation + spanning
+        manager = models.NonTranslated.objects
+        trans_real.activate("de")
+        self.assertEqual(manager.filter(test_o2o=fk_inst_de).count(), 1)
+        self.assertEqual(manager.filter(test_o2o=fk_inst_en).count(), 0)
+        self.assertEqual(manager.filter(test_o2o_en=fk_inst_en).count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_de').count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_en').count(), 0)
+        self.assertEqual(manager.filter(test_o2o__title_en='f_title_en').count(), 1)
+        trans_real.activate("en")
+        self.assertEqual(manager.filter(test_o2o=fk_inst_en).count(), 1)
+        self.assertEqual(manager.filter(test_o2o=fk_inst_de).count(), 0)
+        self.assertEqual(manager.filter(test_o2o_de=fk_inst_de).count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_en2').count(), 1)
+        self.assertEqual(manager.filter(test_o2o__title='f_title_de2').count(), 0)
+        self.assertEqual(manager.filter(test_o2o__title_de='f_title_de2').count(), 1)
 
 
 class OtherFieldsTest(ModeltranslationTestBase):
@@ -1216,7 +1427,7 @@ class OtherFieldsTest(ModeltranslationTestBase):
         self.assertEqual('aaaaa', inst.trans)
 
         inst.save()
-        db_values = models.DescriptorModel.objects.values('normal', 'trans_en', 'trans_de')[0]
+        db_values = models.DescriptorModel.objects.raw_values('normal', 'trans_en', 'trans_de')[0]
         self.assertEqual(3, db_values['normal'])
         self.assertEqual(5, db_values['trans_de'])
         self.assertEqual(0, db_values['trans_en'])
@@ -1236,7 +1447,7 @@ class OtherFieldsTest(ModeltranslationTestBase):
         inst.trans_de = 4
         self.assertEqual('aaaa', inst.trans_de)
         inst.save()
-        db_values = models.DescriptorModel.objects.values('normal', 'trans_en', 'trans_de')[0]
+        db_values = models.DescriptorModel.objects.raw_values('normal', 'trans_en', 'trans_de')[0]
         self.assertEqual(3, db_values['normal'])
         self.assertEqual(4, db_values['trans_de'])
         self.assertEqual(1, db_values['trans_en'])
@@ -1658,8 +1869,8 @@ class UpdateCommandTest(ModeltranslationTestBase):
         models.TestModel.objects.all().rewrite(False).update(title='initial')
 
         # Check raw data using ``values``
-        obj1 = models.TestModel.objects.filter(pk=pk1).values()[0]
-        obj2 = models.TestModel.objects.filter(pk=pk2).values()[0]
+        obj1 = models.TestModel.objects.filter(pk=pk1).raw_values()[0]
+        obj2 = models.TestModel.objects.filter(pk=pk2).raw_values()[0]
         self.assertEqual('', obj1['title_de'])
         self.assertEqual('initial', obj1['title'])
         self.assertEqual('already', obj2['title_de'])
@@ -1998,16 +2209,38 @@ class TranslationAdminTest(ModeltranslationTestBase):
         trans_real.activate('de')
         self.assertEqual(get_language(), 'de')
 
+        # Non-translated slug based on translated field (using active language)
         class NameModelAdmin(admin.TranslationAdmin):
             prepopulated_fields = {'slug': ('firstname',)}
         ma = NameModelAdmin(models.NameModel, self.site)
         self.assertEqual(ma.prepopulated_fields, {'slug': ('firstname_de',)})
 
+        # Checking multi-field
         class NameModelAdmin(admin.TranslationAdmin):
             prepopulated_fields = {'slug': ('firstname', 'lastname',)}
         ma = NameModelAdmin(models.NameModel, self.site)
         self.assertEqual(ma.prepopulated_fields, {'slug': ('firstname_de', 'lastname_de',)})
 
+        # Non-translated slug based on non-translated field (no change)
+        class NameModelAdmin(admin.TranslationAdmin):
+            prepopulated_fields = {'slug': ('age',)}
+        ma = NameModelAdmin(models.NameModel, self.site)
+        self.assertEqual(ma.prepopulated_fields, {'slug': ('age',)})
+
+        # Translated slug based on non-translated field (all populated on the same value)
+        class NameModelAdmin(admin.TranslationAdmin):
+            prepopulated_fields = {'slug2': ('age',)}
+        ma = NameModelAdmin(models.NameModel, self.site)
+        self.assertEqual(ma.prepopulated_fields, {'slug2_en': ('age',), 'slug2_de': ('age',)})
+
+        # Translated slug based on translated field (corresponding)
+        class NameModelAdmin(admin.TranslationAdmin):
+            prepopulated_fields = {'slug2': ('firstname',)}
+        ma = NameModelAdmin(models.NameModel, self.site)
+        self.assertEqual(ma.prepopulated_fields, {'slug2_en': ('firstname_en',),
+                                                  'slug2_de': ('firstname_de',)})
+
+        # Check that current active language is used
         trans_real.activate('en')
         self.assertEqual(get_language(), 'en')
 
@@ -2016,10 +2249,12 @@ class TranslationAdminTest(ModeltranslationTestBase):
         ma = NameModelAdmin(models.NameModel, self.site)
         self.assertEqual(ma.prepopulated_fields, {'slug': ('firstname_en',)})
 
-        class NameModelAdmin(admin.TranslationAdmin):
-            prepopulated_fields = {'slug': ('firstname', 'lastname',)}
-        ma = NameModelAdmin(models.NameModel, self.site)
-        self.assertEqual(ma.prepopulated_fields, {'slug': ('firstname_en', 'lastname_en',)})
+        # Prepopulation language can be overriden by MODELTRANSLATION_PREPOPULATE_LANGUAGE
+        with reload_override_settings(MODELTRANSLATION_PREPOPULATE_LANGUAGE='de'):
+            class NameModelAdmin(admin.TranslationAdmin):
+                prepopulated_fields = {'slug': ('firstname',)}
+            ma = NameModelAdmin(models.NameModel, self.site)
+            self.assertEqual(ma.prepopulated_fields, {'slug': ('firstname_de',)})
 
     def test_proxymodel_field_argument(self):
         class ProxyTestModelAdmin(admin.TranslationAdmin):
@@ -2180,6 +2415,33 @@ class TestManager(ModeltranslationTestBase):
         self.assertEqual(titles_for_en, ('most', 'more_en', 'more_de', 'least'))
         self.assertEqual(titles_for_de, ('most', 'more_de', 'more_en', 'least'))
 
+    def test_values(self):
+        manager = models.ManagerTestModel.objects
+        manager.create(title_en='en', title_de='de')
+
+        raw_obj = manager.raw_values('title')[0]
+        obj = manager.values('title')[0]
+        with override('de'):
+            raw_obj2 = manager.raw_values('title')[0]
+            obj2 = manager.values('title')[0]
+
+        # Raw_values returns real database values regardless of current language
+        self.assertEqual(raw_obj['title'], raw_obj2['title'])
+        # Values present language-aware data, from the moment of retrieval
+        self.assertEqual(obj['title'],  'en')
+        self.assertEqual(obj2['title'], 'de')
+
+        # Values_list behave similarly
+        self.assertEqual(list(manager.values_list('title', flat=True)), ['en'])
+        with override('de'):
+            self.assertEqual(list(manager.values_list('title', flat=True)), ['de'])
+
+        # One can always turn rewrite off
+        a = list(manager.rewrite(False).values_list('title', flat=True))
+        with override('de'):
+            b = list(manager.rewrite(False).values_list('title', flat=True))
+        self.assertEqual(a, b)
+
     def test_custom_manager(self):
         """Test if user-defined manager is still working"""
         n = models.CustomManagerTestModel(title='')
@@ -2200,6 +2462,12 @@ class TestManager(ModeltranslationTestBase):
         self.assertEqual(2, models.CustomManagerTestModel.objects.count())
         with override('de'):
             self.assertEqual(1, models.CustomManagerTestModel.objects.count())
+
+    def test_non_objects_manager(self):
+        """Test if managers other than ``objects`` are patched too"""
+        from modeltranslation.manager import MultilingualManager
+        manager = models.CustomManagerTestModel.another_mgr_name
+        self.assertTrue(isinstance(manager, MultilingualManager))
 
     def test_custom_manager2(self):
         """Test if user-defined queryset is still working"""

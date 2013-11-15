@@ -91,10 +91,13 @@ Multilingual Manager
 
 .. versionadded:: 0.5
 
-Every model registered for translation is patched so that its manager becomes a subclass
+Every model registered for translation is patched so that all its managers become subclasses
 of ``MultilingualManager`` (of course, if a custom manager was defined on the model, its
 functions will be retained). ``MultilingualManager`` simplifies language-aware queries,
 especially on third-party apps, by rewriting query field names.
+
+Every model's manager is patched, not only ``objects`` (even managers inherited from abstract base
+classes).
 
 For example::
 
@@ -119,6 +122,9 @@ These manager methods perform rewriting:
 - ``filter()``, ``exclude()``, ``get()``
 - ``order_by()``
 - ``update()``
+- ``only()``, ``defer()``
+- ``values()``, ``values_list()``
+- ``dates()``
 - ``create()``, with optional auto-population_ feature
 
 In order not to introduce differences between ``X.objects.create(...)`` and ``X(...)``, model
@@ -127,6 +133,9 @@ constructor is also patched and performs rewriting of field names prior to regul
 If one wants to turn rewriting of field names off, this can be easily achieved with
 ``rewrite(mode)`` method. ``mode`` is a boolean specifying whether rewriting should be applied.
 It can be changed several times inside a query. So ``X.objects.rewrite(False)`` turns rewriting off.
+
+``MultilingualManager`` offers one additional method: ``raw_values``. It returns actual values from
+the database, without field names rewriting. Useful for checking translated field database value.
 
 Auto-population
 ***************
@@ -203,11 +212,17 @@ Falling back
 ------------
 
 Modeltranslation provides mechanism to control behaviour of data access in case of empty
-translation values.
+translation values. This mechanism affects field access.
 
 Consider ``News`` example: a creator of some news hasn't specified it's german title and content,
 but only english ones. Then if a german visitor is viewing site, we would rather show him english
-title/content of the news than display empty strings. This is called *fallback*.
+title/content of the news than display empty strings. This is called *fallback*. ::
+
+    News.title_en = 'English title'
+    News.title_de = ''
+    print News.title
+    # If current active language is german, it should display title_de field value ('').
+    # But if fallback is enabled, it would display 'English title' instead.
 
 There are several ways of controlling fallback, described below.
 

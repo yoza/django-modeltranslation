@@ -9,9 +9,9 @@ Requirements
 +------------------+------------+-----------+
 | Modeltranslation | Python     | Django    |
 +==================+============+===========+
-| >=0.7            | 3.2 - 3.3  |       1.5 |
+| >=0.7            | 3.2 - 3.3  | 1.5 - 1.6 |
 |                  +------------+-----------+
-|                  | 2.6 - 2.7  | 1.4 - 1.5 |
+|                  | 2.6 - 2.7  | 1.4 - 1.6 |
 +------------------+------------+-----------+
 | ==0.5, ==0.6     | 2.6 - 2.7  |       1.5 |
 |                  +------------+-----------+
@@ -318,3 +318,17 @@ Default: ``True``
 .. versionadded:: 0.6
 
 Control if :ref:`fallback <fallback>` (both language and value) will occur.
+
+
+.. _settings-modeltranslation_loaddata_retain_locale:
+
+``MODELTRANSLATION_LOADDATA_RETAIN_LOCALE``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Default: ``True``
+
+.. versionadded:: 0.7
+
+Control if the ``loaddata`` command should leave the settings-defined locale alone. Setting it
+to ``False`` will result in previous behaviour of ``loaddata``: inserting fixtures to database
+under `en-us` locale.

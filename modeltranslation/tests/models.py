@@ -52,10 +52,11 @@ class FallbackModel2(models.Model):
 class FileFieldsModel(models.Model):
     title = models.CharField(ugettext_lazy('title'), max_length=255)
     file = models.FileField(upload_to='modeltranslation_tests', null=True, blank=True)
+    file2 = models.FileField(upload_to='modeltranslation_tests')
     image = models.ImageField(upload_to='modeltranslation_tests', null=True, blank=True)
 
 
-########## Foreign Key fields testing
+########## Foreign Key / OneToOneField testing
 
 class NonTranslated(models.Model):
     title = models.CharField(ugettext_lazy('title'), max_length=255)
@@ -67,6 +68,14 @@ class ForeignKeyModel(models.Model):
     optional = models.ForeignKey(TestModel, blank=True, null=True)
     hidden = models.ForeignKey(TestModel, blank=True, null=True, related_name="+")
     non = models.ForeignKey(NonTranslated, blank=True, null=True, related_name="test_fks")
+
+
+class OneToOneFieldModel(models.Model):
+    title = models.CharField(ugettext_lazy('title'), max_length=255)
+    test = models.OneToOneField(TestModel, null=True, related_name="test_o2o")
+    optional = models.OneToOneField(TestModel, blank=True, null=True)
+    # No hidden option for OneToOne
+    non = models.OneToOneField(NonTranslated, blank=True, null=True, related_name="test_o2o")
 
 
 ########## Custom fields testing
@@ -229,7 +238,9 @@ class GroupFieldsetsModel(models.Model):
 class NameModel(models.Model):
     firstname = models.CharField(max_length=50)
     lastname = models.CharField(max_length=50)
+    age = models.CharField(max_length=50)
     slug = models.SlugField(max_length=100)
+    slug2 = models.SlugField(max_length=100)
 
 
 ########## Integration testing
@@ -264,6 +275,8 @@ class CustomManager(models.Manager):
 class CustomManagerTestModel(models.Model):
     title = models.CharField(ugettext_lazy('title'), max_length=255)
     objects = CustomManager()
+
+    another_mgr_name = CustomManager()
 
 
 class CustomQuerySet(models.query.QuerySet):
