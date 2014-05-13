@@ -215,7 +215,7 @@ class TranslationBaseModelAdmin(BaseModelAdmin):
         if exclude_languages:
             excl_languages = exclude_languages
         exclude = []
-        for orig_fieldname, translation_fields in self.trans_opts.fields.iteritems():
+        for orig_fieldname, translation_fields in self.trans_opts.fields.items():
             for tfield in translation_fields:
                 language = tfield.name.split('_')[-1]
                 if language in excl_languages and tfield not in exclude:
@@ -284,7 +284,7 @@ class TranslationAdmin(TranslationBaseModelAdmin, admin.ModelAdmin):
                     # Extract the original field's verbose_name for use as this
                     # fieldset's label - using ugettext_lazy in your model
                     # declaration can make that translatable.
-                    label = self.model._meta.get_field(orig_field).verbose_name
+                    label = self.model._meta.get_field(orig_field).verbose_name.capitalize()
                     temp_fieldsets[orig_field] = (label, {
                         'fields': trans_fieldnames,
                         'classes': ('mt-fieldset',)
@@ -345,7 +345,7 @@ class TabbedDjangoJqueryTranslationAdmin(TranslationAdmin):
     class Media:
         js = (
             'modeltranslation/js/force_jquery.js',
-            'http://ajax.googleapis.com/ajax/libs/jqueryui/1.8.2/jquery-ui.min.js',
+            '//ajax.googleapis.com/ajax/libs/jqueryui/1.8.2/jquery-ui.min.js',
             'modeltranslation/js/tabbed_translation_fields.js',
         )
         css = {
@@ -357,8 +357,8 @@ TabbedTranslationAdmin = TabbedDjangoJqueryTranslationAdmin
 class TabbedExternalJqueryTranslationAdmin(TranslationAdmin):
     class Media:
         js = (
-            'http://ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js',
-            'http://ajax.googleapis.com/ajax/libs/jqueryui/1.10.2/jquery-ui.min.js',
+            '//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js',
+            '//ajax.googleapis.com/ajax/libs/jqueryui/1.10.2/jquery-ui.min.js',
             'modeltranslation/js/tabbed_translation_fields.js',
         )
         css = {

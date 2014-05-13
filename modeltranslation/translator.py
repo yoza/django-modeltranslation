@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from django.utils.six import with_metaclass
+from django.core.exceptions import ImproperlyConfigured
 from django.db.models import Manager, ForeignKey, OneToOneField
 from django.db.models.base import ModelBase
 from django.db.models.signals import post_init
-from django.dispatch import receiver
 
 from modeltranslation import settings as mt_settings
 from modeltranslation.fields import (NONE, create_translation_field, TranslationFieldDescriptor,
@@ -58,6 +58,7 @@ class TranslationOptions(with_metaclass(FieldsAggregationMetaClass, object)):
     with translated model. This model may be not translated itself.
     ``related_fields`` contains names of reverse lookup fields.
     """
+    required_languages = ()
 
     def __init__(self, model):
         """
@@ -69,6 +70,28 @@ class TranslationOptions(with_metaclass(FieldsAggregationMetaClass, object)):
         self.local_fields = dict((f, set()) for f in self.fields)
         self.fields = dict((f, set()) for f in self.fields)
         self.related_fields = []
+
+    def validate(self):
+        """
+        Perform options validation.
+        """
+        # TODO: at the moment only required_languages is validated.
+        # Maybe check other options as well?
+        if self.required_languages:
+            if isinstance(self.required_languages, (tuple, list)):
+                self._check_languages(self.required_languages)
+            else:
+                self._check_languages(self.required_languages.keys(), extra=('default',))
+                for fieldnames in self.required_languages.values():
+                    if any(f not in self.fields for f in fieldnames):
+                        raise ImproperlyConfigured(
+                            'Fieldname in required_languages which is not in fields option.')
+
+    def _check_languages(self, languages, extra=()):
+        correct = mt_settings.AVAILABLE_LANGUAGES + list(extra)
+        if any(l not in correct for l in languages):
+            raise ImproperlyConfigured(
+                'Language in required_languages which is not in AVAILABLE_LANGUAGES.')
 
     def update(self, other):
         """
@@ -129,6 +152,13 @@ def add_translation_fields(model, opts):
         model._meta._fill_fields_cache()
 
 
+def has_custom_queryset(manager):
+    "Check whether manager (or its parents) has declared some custom get_queryset method."
+    old_diff = getattr(manager, 'get_query_set', None) != getattr(Manager, 'get_query_set', None)
+    new_diff = getattr(manager, 'get_queryset', None) != getattr(Manager, 'get_queryset', None)
+    return old_diff or new_diff
+
+
 def add_manager(model):
     """
     Monkey patches the original model to use MultilingualManager instead of
@@ -138,16 +168,30 @@ def add_manager(model):
     """
     if model._meta.abstract:
         return
+
+    def patch_manager_class(manager):
+        if isinstance(manager, MultilingualManager):
+            return
+        if manager.__class__ is Manager:
+            manager.__class__ = MultilingualManager
+        else:
+            class NewMultilingualManager(MultilingualManager, manager.__class__):
+                use_for_related_fields = getattr(
+                    manager.__class__, "use_for_related_fields", not has_custom_queryset(manager))
+            manager.__class__ = NewMultilingualManager
+
     for _, attname, cls in model._meta.concrete_managers + model._meta.abstract_managers:
         current_manager = getattr(model, attname)
-        if isinstance(current_manager, MultilingualManager):
-            continue
-        if current_manager.__class__ is Manager:
-            current_manager.__class__ = MultilingualManager
-        else:
-            class NewMultilingualManager(MultilingualManager, current_manager.__class__):
-                pass
-            current_manager.__class__ = NewMultilingualManager
+        prev_class = current_manager.__class__
+        patch_manager_class(current_manager)
+        if model._default_manager.__class__ is prev_class:
+            # Normally model._default_manager is a reference to one of model's managers
+            # (and would be patched by the way).
+            # However, in some rare situations (mostly proxy models)
+            # model._default_manager is not the same instance as one of managers, but it
+            # share the same class.
+            model._default_manager.__class__ = current_manager.__class__
+    patch_manager_class(model._base_manager)
 
 
 def patch_constructor(model):
@@ -168,7 +212,6 @@ def patch_constructor(model):
     model.__init__ = new_init
 
 
-@receiver(post_init)
 def delete_mt_init(sender, instance, **kwargs):
     if hasattr(instance, '_mt_init'):
         del instance._mt_init
@@ -188,9 +231,10 @@ def patch_clean_fields(model):
             #   translated field unchanged), as if field was omitted from form
             # - if no, then proceed as normally: clear the field
             for field_name, value in self._mt_form_pending_clear.items():
-                orig_field_name = self._meta.get_field(field_name).translated_field.name
+                field = self._meta.get_field(field_name)
+                orig_field_name = field.translated_field.name
                 if orig_field_name in exclude:
-                    setattr(self, field_name, value)
+                    field.save_form_data(self, value, check=False)
             delattr(self, '_mt_form_pending_clear')
         old_clean_fields(self, exclude)
     model.clean_fields = new_clean_fields
@@ -335,6 +379,9 @@ class Translator(object):
             # Find inherited fields and create options instance for the model.
             opts = self._get_options_for_model(model, opts_class, **options)
 
+            # Now, when all fields are initialized and inherited, validate configuration.
+            opts.validate()
+
             # Mark the object explicitly as registered -- registry caches
             # options of all models, registered or not.
             opts.registered = True
@@ -351,6 +398,9 @@ class Translator(object):
 
             # Patch __init__ to rewrite fields
             patch_constructor(model)
+
+            # Connect signal for model
+            post_init.connect(delete_mt_init, sender=model)
 
             # Patch clean_fields to verify form field clearing
             patch_clean_fields(model)
