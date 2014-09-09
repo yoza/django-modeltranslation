@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 import datetime
 from decimal import Decimal
+import imp
 import os
 import shutil
-import imp
 
+import django
 from django import forms
 from django.conf import settings as django_settings
 from django.contrib.admin.sites import AdminSite
@@ -15,23 +16,27 @@ from django.core.files.storage import default_storage
 from django.core.management import call_command
 from django.db import IntegrityError
 from django.db.models import Q, F
-from django.db.models.loading import AppCache
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import override_settings
 from django.utils import six
 from django.utils.translation import get_language, override, trans_real
 
+try:
+    from django.apps import apps as django_apps
+    NEW_APP_CACHE = True
+except ImportError:
+    from django.db.models.loading import AppCache
+    NEW_APP_CACHE = False
+
+
 from modeltranslation import admin, settings as mt_settings, translator
 from modeltranslation.forms import TranslationModelForm
 from modeltranslation.models import autodiscover
-from modeltranslation.tests import models
-from modeltranslation.tests.translation import (FallbackModel2TranslationOptions,
-                                                FieldInheritanceCTranslationOptions,
-                                                FieldInheritanceETranslationOptions)
 from modeltranslation.tests.test_settings import TEST_SETTINGS
 from modeltranslation.utils import (build_css_class, build_localized_fieldname,
                                     auto_populate, fallbacks)
 
+models = translation = None
 
 # None of the following tests really depend on the content of the request,
 # so we'll just pass in None.
@@ -61,7 +66,7 @@ def default_fallback():
 @override_settings(**TEST_SETTINGS)
 class ModeltranslationTransactionTestBase(TransactionTestCase):
     urls = 'modeltranslation.tests.urls'
-    cache = AppCache()
+    cache = django_apps if NEW_APP_CACHE else AppCache()
     synced = False
 
     @classmethod
@@ -76,11 +81,9 @@ class ModeltranslationTransactionTestBase(TransactionTestCase):
             # In order to perform only one syncdb
             ModeltranslationTestBase.synced = True
             with override_settings(**TEST_SETTINGS):
-                import sys
-
                 # 1. Reload translation in case USE_I18N was False
-                from django.utils import translation
-                imp.reload(translation)
+                from django.utils import translation as dj_trans
+                imp.reload(dj_trans)
 
                 # 2. Reload MT because LANGUAGES likely changed.
                 imp.reload(mt_settings)
@@ -90,19 +93,29 @@ class ModeltranslationTransactionTestBase(TransactionTestCase):
                 # 3. Reset test models (because autodiscover have already run, those models
                 #    have translation fields, but for languages previously defined. We want
                 #    to be sure that 'de' and 'en' are available)
-                del cls.cache.app_models['tests']
-                imp.reload(models)
-                cls.cache.load_app('modeltranslation.tests')
-                sys.modules.pop('modeltranslation.tests.translation', None)
+                if not NEW_APP_CACHE:
+                    cls.cache.load_app('modeltranslation.tests')
+                else:
+                    del cls.cache.all_models['tests']
+                    import sys
+                    sys.modules.pop('modeltranslation.tests.models', None)
+                    sys.modules.pop('modeltranslation.tests.translation', None)
+                    cls.cache.get_app_config('tests').import_models(cls.cache.all_models['tests'])
 
                 # 4. Autodiscover
-                from modeltranslation import models as aut_models
-                imp.reload(aut_models)
+                from modeltranslation.models import handle_translation_registrations
+                handle_translation_registrations()
 
                 # 5. Syncdb (``migrate=False`` in case of south)
                 from django.db import connections, DEFAULT_DB_ALIAS
                 call_command('syncdb', verbosity=0, migrate=False, interactive=False,
                              database=connections[DEFAULT_DB_ALIAS].alias, load_initial_data=False)
+
+                # A rather dirty trick to import models into module namespace, but not before
+                # tests app has been added into INSTALLED_APPS and loaded
+                # (that's why this is not imported in normal import section)
+                global models, translation
+                from modeltranslation.tests import models, translation  # NOQA
 
     def setUp(self):
         self._old_language = get_language()
@@ -151,7 +164,10 @@ class TestAutodiscover(ModeltranslationTestBase):
     def tearDown(self):
         import sys
         # Rollback model classes
-        del self.cache.app_models['test_app']
+        if NEW_APP_CACHE:
+            del self.cache.all_models['test_app']
+        else:
+            del self.cache.app_models['test_app']
         from .test_app import models
         imp.reload(models)
         # Delete translation modules from import cache
@@ -412,7 +428,7 @@ class ModeltranslationTest(ModeltranslationTestBase):
         self.assertEqual(n.title, '')  # Falling back to default field value
         self.assertEqual(
             n.text,
-            FallbackModel2TranslationOptions.fallback_values['text'])
+            translation.FallbackModel2TranslationOptions.fallback_values['text'])
 
     def _compare_instances(self, x, y, field):
         self.assertEqual(getattr(x, field), getattr(y, field),
@@ -1135,9 +1151,9 @@ class OtherFieldsTest(ModeltranslationTestBase):
         self.assertTrue('ip' in field_names)
         self.assertTrue('ip_de' in field_names)
         self.assertTrue('ip_en' in field_names)
-#        self.assertTrue('genericip' in field_names)
-#        self.assertTrue('genericip_de' in field_names)
-#        self.assertTrue('genericip_en' in field_names)
+        self.assertTrue('genericip' in field_names)
+        self.assertTrue('genericip_de' in field_names)
+        self.assertTrue('genericip_en' in field_names)
         self.assertTrue('float' in field_names)
         self.assertTrue('float_de' in field_names)
         self.assertTrue('float_en' in field_names)
@@ -1266,29 +1282,29 @@ class OtherFieldsTest(ModeltranslationTestBase):
         inst.ip = '1;2'
         self.assertRaises(ValidationError, inst.full_clean)
 
-#    def test_translated_models_genericipaddress_instance(self):
-#        inst = OtherFieldsModel()
-#        inst.genericip = '2a02:42fe::4'
-#        self.assertEqual('de', get_language())
-#        self.assertEqual('2a02:42fe::4', inst.genericip)
-#        self.assertEqual('2a02:42fe::4', inst.genericip_de)
-#        self.assertEqual(None, inst.genericip_en)
-#
-#        inst.genericip = '2a02:23fe::4'
-#        inst.save()
-#        self.assertEqual('2a02:23fe::4', inst.genericip)
-#        self.assertEqual('2a02:23fe::4', inst.genericip_de)
-#        self.assertEqual(None, inst.genericip_en)
-#
-#        trans_real.activate('en')
-#        inst.genericip = '2a02:42fe::4'
-#        self.assertEqual('2a02:42fe::4', inst.genericip)
-#        self.assertEqual('2a02:23fe::4', inst.genericip_de)
-#        self.assertEqual('2a02:42fe::4', inst.genericip_en)
-#
-#        # Check if validation is preserved
-#        inst.genericip = '1;2'
-#        self.assertRaises(ValidationError, inst.full_clean)
+    def test_translated_models_genericipaddress_instance(self):
+        inst = models.OtherFieldsModel()
+        inst.genericip = '2a02:42fe::4'
+        self.assertEqual('de', get_language())
+        self.assertEqual('2a02:42fe::4', inst.genericip)
+        self.assertEqual('2a02:42fe::4', inst.genericip_de)
+        self.assertEqual(None, inst.genericip_en)
+
+        inst.genericip = '2a02:23fe::4'
+        inst.save()
+        self.assertEqual('2a02:23fe::4', inst.genericip)
+        self.assertEqual('2a02:23fe::4', inst.genericip_de)
+        self.assertEqual(None, inst.genericip_en)
+
+        trans_real.activate('en')
+        inst.genericip = '2a02:42fe::4'
+        self.assertEqual('2a02:42fe::4', inst.genericip)
+        self.assertEqual('2a02:23fe::4', inst.genericip_de)
+        self.assertEqual('2a02:42fe::4', inst.genericip_en)
+
+        # Check if validation is preserved
+        inst.genericip = '1;2'
+        self.assertRaises(ValidationError, inst.full_clean)
 
     def test_translated_models_float_instance(self):
         inst = models.OtherFieldsModel()
@@ -1840,7 +1856,7 @@ class ModelInheritanceFieldAggregationTest(ModeltranslationTestBase):
     in modeltranslation.
     """
     def test_field_aggregation(self):
-        clsb = FieldInheritanceCTranslationOptions
+        clsb = translation.FieldInheritanceCTranslationOptions
         self.assertTrue('titlea' in clsb.fields)
         self.assertTrue('titleb' in clsb.fields)
         self.assertTrue('titlec' in clsb.fields)
@@ -1848,7 +1864,7 @@ class ModelInheritanceFieldAggregationTest(ModeltranslationTestBase):
         self.assertEqual(tuple, type(clsb.fields))
 
     def test_multi_inheritance(self):
-        clsb = FieldInheritanceETranslationOptions
+        clsb = translation.FieldInheritanceETranslationOptions
         self.assertTrue('titlea' in clsb.fields)
         self.assertTrue('titleb' in clsb.fields)
         self.assertTrue('titlec' in clsb.fields)
@@ -2120,6 +2136,18 @@ class TranslationAdminTest(ModeltranslationTestBase):
         # Remove translation for DataModel
         translator.translator.unregister(models.DataModel)
 
+    def test_list_editable(self):
+        class TestModelAdmin(admin.TranslationAdmin):
+            list_editable = ['title']
+            list_display = ['id', 'title']
+            list_display_links = ['id']
+
+        ma = TestModelAdmin(models.TestModel, self.site)
+        list_editable = ['title_de', 'title_en']
+        list_display = ['id', 'title_de', 'title_en']
+        self.assertEqual(tuple(ma.list_editable), tuple(list_editable))
+        self.assertEqual(tuple(ma.list_display), tuple(list_display))
+
     def test_build_css_class(self):
         with reload_override_settings(LANGUAGES=(('de', 'German'), ('en', 'English'),
                                                  ('es-ar', 'Argentinian Spanish'),)):
@@ -2286,6 +2314,8 @@ class ThirdPartyAppIntegrationTest(ModeltranslationTestBase):
         class CreationForm(forms.ModelForm):
             class Meta:
                 model = self.model
+                if django.VERSION >= (1, 6):
+                    fields = '__all__'
 
         creation_form = CreationForm({'name': 'abc'})
         inst = creation_form.save()
@@ -2347,6 +2377,10 @@ class TestManager(ModeltranslationTestBase):
             self.assertEqual('new', n.title_de)
             self.assertEqual('title en', m.title_en)
             self.assertEqual('new', m.title_de)
+
+        # Test Python3 "dictionary changed size during iteration"
+        self.assertEqual(1, models.ManagerTestModel.objects.filter(title='en',
+                                                                   title_en='en').count())
 
     def test_q(self):
         """Test if Q queries are rewritten."""
@@ -2414,6 +2448,38 @@ class TestManager(ModeltranslationTestBase):
 
         self.assertEqual(titles_for_en, ('most', 'more_en', 'more_de', 'least'))
         self.assertEqual(titles_for_de, ('most', 'more_de', 'more_en', 'least'))
+
+    def assert_fallback(self, method, expected1, *args, **kwargs):
+        transform = kwargs.pop('transform', lambda x: x)
+        expected2 = kwargs.pop('expected_de', expected1)
+        with default_fallback():
+            # Fallback is ('de',)
+            obj = method(*args, **kwargs)[0]
+            with override('de'):
+                obj2 = method(*args, **kwargs)[0]
+        self.assertEqual(transform(obj), expected1)
+        self.assertEqual(transform(obj2), expected2)
+
+    def test_values_fallback(self):
+        manager = models.ManagerTestModel.objects
+        manager.create(title_en='', title_de='de')
+        self.assertEqual('en', get_language())
+
+        self.assert_fallback(manager.values, 'de', 'title', transform=lambda x: x['title'])
+        self.assert_fallback(manager.values_list, 'de', 'title', flat=True)
+        self.assert_fallback(manager.values_list, ('de', '', 'de'), 'title', 'title_en', 'title_de')
+
+        # Settings are taken into account - fallback can be disabled
+        with override_settings(MODELTRANSLATION_ENABLE_FALLBACKS=False):
+            self.assert_fallback(manager.values, '', 'title', expected_de='de',
+                                 transform=lambda x: x['title'])
+
+        # Test fallback values
+        manager = models.FallbackModel.objects
+        manager.create()
+
+        self.assert_fallback(manager.values, 'fallback', 'title', transform=lambda x: x['title'])
+        self.assert_fallback(manager.values_list, ('fallback', 'fallback'), 'title', 'text')
 
     def test_values(self):
         manager = models.ManagerTestModel.objects
@@ -2491,6 +2557,12 @@ class TestManager(ModeltranslationTestBase):
         self.assertEqual(2, models.CustomManagerTestModel.objects.count())
         with override('de'):
             self.assertEqual(1, models.CustomManagerTestModel.objects.count())
+
+    def test_custom_manager_custom_method_name(self):
+        """Test if custom method also returns MultilingualQuerySet"""
+        from modeltranslation.manager import MultilingualQuerySet
+        qs = models.CustomManagerTestModel.objects.custom_qs()
+        self.assertIsInstance(qs, MultilingualQuerySet)
 
     def test_non_objects_manager(self):
         """Test if managers other than ``objects`` are patched too"""
@@ -2694,6 +2766,58 @@ class TestManager(ModeltranslationTestBase):
             self.assertDeferred(True, 'title', 'title_de')
             self.assertDeferred(True, 'text', 'email', 'url')
 
+    def test_deferred_fk(self):
+        """
+        Check if ``select_related`` is rewritten and also
+        if ``only`` and ``defer`` are working with deferred classes
+        """
+        test = models.TestModel.objects.create(title_de='title_de', title_en='title_en')
+        with auto_populate('all'):
+            models.ForeignKeyModel.objects.create(test=test)
+
+        item = models.ForeignKeyModel.objects.select_related("test").defer("test__text")[0]
+        self.assertTrue(item.test.__class__._deferred)
+        self.assertEqual('title_en', item.test.title)
+        self.assertEqual('title_en', item.test.__class__.objects.only('title')[0].title)
+        with override('de'):
+            item = models.ForeignKeyModel.objects.select_related("test").defer("test__text")[0]
+            self.assertTrue(item.test.__class__._deferred)
+            self.assertEqual('title_de', item.test.title)
+            self.assertEqual('title_de', item.test.__class__.objects.only('title')[0].title)
+
+    def test_deferred_spanning(self):
+        test = models.TestModel.objects.create(title_de='title_de', title_en='title_en')
+        with auto_populate('all'):
+            models.ForeignKeyModel.objects.create(test=test)
+
+        item1 = models.ForeignKeyModel.objects.select_related("test").defer("test__text")[0].test
+        item2 = models.TestModel.objects.defer("text")[0]
+        self.assertIs(item1.__class__, item2.__class__)
+        # DeferredAttribute descriptors are present
+        self.assertIn('text_en', dir(item1.__class__))
+        self.assertIn('text_de', dir(item1.__class__))
+
+    def test_translation_fields_appending(self):
+        from modeltranslation.manager import append_lookup_keys, append_lookup_key
+        self.assertEqual(set(['untrans']), append_lookup_key(models.ForeignKeyModel, 'untrans'))
+        self.assertEqual(set(['title', 'title_en', 'title_de']),
+                         append_lookup_key(models.ForeignKeyModel, 'title'))
+        self.assertEqual(set(['test', 'test_en', 'test_de']),
+                         append_lookup_key(models.ForeignKeyModel, 'test'))
+        self.assertEqual(set(['title__eq', 'title_en__eq', 'title_de__eq']),
+                         append_lookup_key(models.ForeignKeyModel, 'title__eq'))
+        self.assertEqual(set(['test__smt', 'test_en__smt', 'test_de__smt']),
+                         append_lookup_key(models.ForeignKeyModel, 'test__smt'))
+        big_set = set(['test__url', 'test__url_en', 'test__url_de',
+                       'test_en__url', 'test_en__url_en', 'test_en__url_de',
+                       'test_de__url', 'test_de__url_en', 'test_de__url_de'])
+        self.assertEqual(big_set, append_lookup_key(models.ForeignKeyModel, 'test__url'))
+        self.assertEqual(set(['untrans__url', 'untrans__url_en', 'untrans__url_de']),
+                         append_lookup_key(models.ForeignKeyModel, 'untrans__url'))
+
+        self.assertEqual(big_set.union(['title', 'title_en', 'title_de']),
+                         append_lookup_keys(models.ForeignKeyModel, ['test__url', 'title']))
+
     def test_constructor_inheritance(self):
         inst = models.AbstractModelB()
         # Check if fields assigned in constructor hasn't been ignored.
@@ -2706,6 +2830,8 @@ class TranslationModelFormTest(ModeltranslationTestBase):
         class TestModelForm(TranslationModelForm):
             class Meta:
                 model = models.TestModel
+                if django.VERSION >= (1, 6):
+                    fields = '__all__'
 
         form = TestModelForm()
         self.assertEqual(list(form.base_fields),

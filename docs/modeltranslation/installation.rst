@@ -9,7 +9,13 @@ Requirements
 +------------------+------------+-----------+
 | Modeltranslation | Python     | Django    |
 +==================+============+===========+
-| >=0.7            | 3.2 - 3.3  | 1.5 - 1.6 |
+| >=0.8            | 3.2 - 3.4  | 1.5 - 1.7 |
+|                  +------------+-----------+
+|                  | 2.7        |       1.7 |
+|                  +------------+-----------+
+|                  | 2.6 - 2.7  | 1.4 - 1.6 |
++------------------+------------+-----------+
+| ==0.7            | 3.2 - 3.3  | 1.5 - 1.6 |
 |                  +------------+-----------+
 |                  | 2.6 - 2.7  | 1.4 - 1.6 |
 +------------------+------------+-----------+
@@ -53,20 +59,24 @@ Setup
 To setup the application please follow these steps. Each step is described
 in detail in the following sections:
 
-1. Add the ``modeltranslation`` app to the ``INSTALLED_APPS`` variable of your
+1. Add ``modeltranslation`` to the ``INSTALLED_APPS`` variable of your
    project's ``settings.py``.
 
-#. Set ``USE_I18N = True`` in ``settings.py``.
+2. Set ``USE_I18N = True`` in ``settings.py``.
 
-#. Configure your ``LANGUAGES`` in ``settings.py``.
+3. Configure your ``LANGUAGES`` in ``settings.py``.
 
-#. Create a ``translation.py`` in your app directory and register
+4. Create a ``translation.py`` in your app directory and register
    ``TranslationOptions`` for every model you want to translate.
 
-#. Sync the database using ``./manage.py syncdb`` (note that this only applies
-   if the models registered in the ``translation.py`` did not have been
-   synced to the database before. If they did - read :ref:`further down <db-fields>` what to do
-   in that case.
+5. Sync the database using ``python manage.py syncdb``.
+
+   .. note:: This only applies if the models registered in ``translation.py`` haven't been
+             synced to the database before. If they have, please read :ref:`db-fields`.
+
+   .. note:: If you are using Django 1.7 and its internal migration system, run
+             ``python manage.py makemigrations``, followed by
+             ``python manage.py migrate`` instead. See :ref:`migrations` for details.
 
 
 Configuration
@@ -88,9 +98,20 @@ Make sure that the ``modeltranslation`` app is listed in your
     INSTALLED_APPS = (
         ...
         'modeltranslation',
+        'django.contrib.admin',  # optional
         ....
     )
 
+.. important::
+    If you want to use the admin integration, ``modeltranslation`` must be put
+    before ``django.contrib.admin`` (only applies when using Django 1.7 or
+    above).
+
+.. important::
+    If you want to use the ``django-debug-toolbar`` together with
+    modeltranslation, put ``debug_toolbar`` as first entry in
+    ``INSTALLED_APPS`` or use `explicit setup
+    <http://django-debug-toolbar.readthedocs.org/en/latest/installation.html#explicit-setup>`_.
 
 .. _settings-languages:
 
@@ -100,10 +121,10 @@ Make sure that the ``modeltranslation`` app is listed in your
 The ``LANGUAGES`` variable must contain all languages used for translation. The
 first language is treated as the *default language*.
 
-The modeltranslation application uses the list of languages to add localized
-fields to the models registered for translation. To use the languages ``de``
-and ``en`` in your project, set the ``LANGUAGES`` variable like this (where
-``de`` is the default language)::
+Modeltranslation uses the list of languages to add localized fields to the
+models registered for translation. To use the languages ``de`` and ``en`` in
+your project, set the ``LANGUAGES`` variable like this (where ``de`` is the
+default language)::
 
     gettext = lambda s: s
     LANGUAGES = (
@@ -129,7 +150,7 @@ and ``en`` in your project, set the ``LANGUAGES`` variable like this (where
     in your project. When it isn't present (and neither is ``MODELTRANSLATION_LANGUAGES``), it
     defaults to Django's
     `global LANGUAGES setting <https://github.com/django/django/blob/master/django/conf/global_settings.py>`_
-    instead, and that are quite a number of languages!
+    instead, and that are quite a few languages!
 
 
 Advanced Settings
@@ -364,4 +385,4 @@ Default: ``True``
 
 Control if the ``loaddata`` command should leave the settings-defined locale alone. Setting it
 to ``False`` will result in previous behaviour of ``loaddata``: inserting fixtures to database
-under `en-us` locale.
+under ``en-us`` locale.

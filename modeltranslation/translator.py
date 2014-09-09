@@ -9,7 +9,8 @@ from modeltranslation import settings as mt_settings
 from modeltranslation.fields import (NONE, create_translation_field, TranslationFieldDescriptor,
                                      TranslatedRelationIdDescriptor,
                                      LanguageCacheSingleObjectDescriptor)
-from modeltranslation.manager import MultilingualManager, rewrite_lookup_key
+from modeltranslation.manager import (MultilingualManager, MultilingualQuerysetManager,
+                                      rewrite_lookup_key)
 from modeltranslation.utils import build_localized_fieldname, parse_field
 
 
@@ -88,7 +89,7 @@ class TranslationOptions(with_metaclass(FieldsAggregationMetaClass, object)):
                             'Fieldname in required_languages which is not in fields option.')
 
     def _check_languages(self, languages, extra=()):
-        correct = mt_settings.AVAILABLE_LANGUAGES + list(extra)
+        correct = list(mt_settings.AVAILABLE_LANGUAGES) + list(extra)
         if any(l not in correct for l in languages):
             raise ImproperlyConfigured(
                 'Language in required_languages which is not in AVAILABLE_LANGUAGES.')
@@ -175,7 +176,8 @@ def add_manager(model):
         if manager.__class__ is Manager:
             manager.__class__ = MultilingualManager
         else:
-            class NewMultilingualManager(MultilingualManager, manager.__class__):
+            class NewMultilingualManager(MultilingualManager, manager.__class__,
+                                         MultilingualQuerysetManager):
                 use_for_related_fields = getattr(
                     manager.__class__, "use_for_related_fields", not has_custom_queryset(manager))
             manager.__class__ = NewMultilingualManager
@@ -387,7 +389,10 @@ class Translator(object):
             opts.registered = True
 
             # Add translation fields to the model.
-            add_translation_fields(model, opts)
+            if model._meta.proxy:
+                delete_cache_fields(model)
+            else:
+                add_translation_fields(model, opts)
 
             # Delete all fields cache for related model (parent and children)
             for related_obj in model._meta.get_all_related_objects():
@@ -481,6 +486,8 @@ class Translator(object):
         Returns an instance of translation options with translated fields
         defined for the ``model`` and inherited from superclasses.
         """
+        if model._deferred:
+            model = model._meta.proxy_for_model
         if model not in self._registry:
             # Create a new type for backwards compatibility.
             opts = type("%sTranslationOptions" % model.__name__,

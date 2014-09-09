@@ -64,6 +64,7 @@ class ForeignKeyModel(models.Model):
     optional = models.ForeignKey(TestModel, blank=True, null=True)
     hidden = models.ForeignKey(TestModel, blank=True, null=True, related_name="+")
     non = models.ForeignKey(NonTranslated, blank=True, null=True, related_name="test_fks")
+    untrans = models.ForeignKey(TestModel, blank=True, null=True, related_name="test_fks_un")
 
 
 class OneToOneFieldModel(models.Model):
@@ -92,7 +93,7 @@ class OtherFieldsModel(models.Model):
     date = models.DateField(blank=True, null=True)
     datetime = models.DateTimeField(blank=True, null=True)
     time = models.TimeField(blank=True, null=True)
-#    genericip = models.GenericIPAddressField(blank=True, null=True)
+    genericip = models.GenericIPAddressField(blank=True, null=True)
 
 
 class FancyDescriptor(object):
@@ -261,9 +262,16 @@ class ManagerTestModel(models.Model):
 
 
 class CustomManager(models.Manager):
-    def get_query_set(self):
-        return (super(CustomManager, self).get_query_set().filter(title__contains='a')
-                .exclude(description__contains='x'))
+    def get_queryset(self):
+        sup = super(CustomManager, self)
+        queryset = sup.get_queryset() if hasattr(sup, 'get_queryset') else sup.get_query_set()
+        return queryset.filter(title__contains='a').exclude(description__contains='x')
+    get_query_set = get_queryset
+
+    def custom_qs(self):
+        sup = super(CustomManager, self)
+        queryset = sup.get_queryset() if hasattr(sup, 'get_queryset') else sup.get_query_set()
+        return queryset
 
     def foo(self):
         return 'bar'
@@ -282,8 +290,9 @@ class CustomQuerySet(models.query.QuerySet):
 
 
 class CustomManager2(models.Manager):
-    def get_query_set(self):
+    def get_queryset(self):
         return CustomQuerySet(self.model, using=self._db)
+    get_query_set = get_queryset
 
 
 class CustomManager2TestModel(models.Model):

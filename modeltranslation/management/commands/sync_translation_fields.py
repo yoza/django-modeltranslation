@@ -10,7 +10,6 @@ You will need to execute this command in two cases:
 Credits: Heavily inspired by django-transmeta's sync_transmeta_db command.
 """
 from optparse import make_option
-from django.conf import settings
 from django.core.management.base import NoArgsCommand
 from django.core.management.color import no_style
 from django.db import connection, transaction
@@ -124,9 +123,8 @@ class Command(NoArgsCommand):
             col_type = f.db_type(connection=connection)
             field_sql = [style.SQL_FIELD(qn(f.column)), style.SQL_COLTYPE(col_type)]
             # column creation
-            sql_output.append("ALTER TABLE %s ADD COLUMN %s;" % (qn(db_table), ' '.join(field_sql)))
-            if not f.null and lang == settings.LANGUAGE_CODE:
-                sql_output.append(
-                    ("ALTER TABLE %s MODIFY COLUMN %s %s %s;" % (
-                        qn(db_table), qn(f.column), col_type, style.SQL_KEYWORD('NOT NULL'))))
+            stmt = "ALTER TABLE %s ADD COLUMN %s" % (qn(db_table), ' '.join(field_sql))
+            if not f.null:
+                stmt += " " + style.SQL_KEYWORD('NOT NULL')
+            sql_output.append(stmt + ";")
         return sql_output

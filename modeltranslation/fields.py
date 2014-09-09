@@ -2,6 +2,7 @@
 from django import forms
 from django.core.exceptions import ImproperlyConfigured
 from django.db.models import fields
+from django.utils import six
 
 from modeltranslation import settings as mt_settings
 from modeltranslation.utils import (
@@ -22,6 +23,7 @@ SUPPORTED_FIELDS = (
     fields.FloatField,
     fields.DecimalField,
     fields.IPAddressField,
+    fields.GenericIPAddressField,
     fields.DateField,
     fields.DateTimeField,
     fields.TimeField,
@@ -30,10 +32,6 @@ SUPPORTED_FIELDS = (
     fields.related.ForeignKey,
     # Above implies also OneToOneField
 )
-try:
-    SUPPORTED_FIELDS += (fields.GenericIPAddressField,)  # Django 1.4+ only
-except AttributeError:
-    pass
 
 
 class NONE:
@@ -141,8 +139,11 @@ class TranslationField(object):
                     self.blank = False
 
         # Adjust the name of this field to reflect the language
-        self.attname = build_localized_fieldname(self.translated_field.name, self.language)
+        self.attname = build_localized_fieldname(self.translated_field.name, language)
         self.name = self.attname
+        if self.translated_field.db_column:
+            self.db_column = build_localized_fieldname(self.translated_field.db_column, language)
+            self.column = self.db_column
 
         # Copy the verbose name and append a language suffix
         # (will show up e.g. in the admin).
@@ -182,14 +183,6 @@ class TranslationField(object):
 
     def __hash__(self):
         return hash((self.creation_counter, self.language))
-
-    def get_attname_column(self):
-        attname = self.get_attname()
-        if self.translated_field.db_column:
-            column = build_localized_fieldname(self.translated_field.db_column, self.language)
-        else:
-            column = attname
-        return attname, column
 
     def formfield(self, *args, **kwargs):
         """
@@ -248,6 +241,14 @@ class TranslationField(object):
             instance._mt_form_pending_clear[self.name] = data
         else:
             super(TranslationField, self).save_form_data(instance, data)
+
+    def deconstruct(self):
+        name, path, args, kwargs = self.translated_field.deconstruct()
+        if self.null is True:
+            kwargs.update({'null': True})
+        if 'db_column' in kwargs:
+            kwargs['db_column'] = self.db_column
+        return six.text_type(self.name), path, args, kwargs
 
     def south_field_triple(self):
         """
