@@ -4,14 +4,18 @@ from copy import deepcopy
 import django
 from django.contrib import admin
 from django.contrib.admin.options import BaseModelAdmin, flatten_fieldsets, InlineModelAdmin
-from django.contrib.contenttypes import generic
 from django import forms
 
 # Ensure that models are registered for translation before TranslationAdmin
 # runs. The import is supposed to resolve a race condition between model import
 # and translation registration in production (see issue #19).
 if django.VERSION < (1, 7):
+    from django.contrib.contenttypes.generic import GenericTabularInline
+    from django.contrib.contenttypes.generic import GenericStackedInline
     import modeltranslation.models  # NOQA
+else:
+    from django.contrib.contenttypes.admin import GenericTabularInline
+    from django.contrib.contenttypes.admin import GenericStackedInline
 from modeltranslation import settings as mt_settings
 from modeltranslation.translator import translator
 from modeltranslation.utils import (
@@ -219,8 +223,7 @@ class TranslationBaseModelAdmin(BaseModelAdmin):
         exclude = []
         for orig_fieldname, translation_fields in self.trans_opts.fields.items():
             for tfield in translation_fields:
-                language = tfield.name.split('_')[-1]
-                if language in excl_languages and tfield not in exclude:
+                if tfield.language in excl_languages and tfield not in exclude:
                     exclude.append(tfield)
         return tuple(exclude)
 
@@ -335,15 +338,20 @@ class TranslationStackedInline(TranslationInlineModelAdmin, admin.StackedInline)
     pass
 
 
-class TranslationGenericTabularInline(TranslationInlineModelAdmin, generic.GenericTabularInline):
+class TranslationGenericTabularInline(TranslationInlineModelAdmin, GenericTabularInline):
     pass
 
 
-class TranslationGenericStackedInline(TranslationInlineModelAdmin, generic.GenericStackedInline):
+class TranslationGenericStackedInline(TranslationInlineModelAdmin, GenericStackedInline):
     pass
 
 
-class TabbedDjangoJqueryTranslationAdmin(TranslationAdmin):
+class TabbedDjango15JqueryTranslationAdmin(TranslationAdmin):
+    """
+    Convenience class which includes the necessary static files for tabbed
+    translation fields. Reuses Django's internal jquery version. Django 1.5
+    included jquery 1.4.2 which is known to work well with jquery-ui 1.8.2.
+    """
     class Media:
         js = (
             'modeltranslation/js/force_jquery.js',
@@ -353,16 +361,41 @@ class TabbedDjangoJqueryTranslationAdmin(TranslationAdmin):
         css = {
             'all': ('modeltranslation/css/tabbed_translation_fields.css',),
         }
-TabbedTranslationAdmin = TabbedDjangoJqueryTranslationAdmin
+
+
+class TabbedDjangoJqueryTranslationAdmin(TranslationAdmin):
+    """
+    Convenience class which includes the necessary media files for tabbed
+    translation fields. Reuses Django's internal jquery version.
+    """
+    class Media:
+        js = (
+            'modeltranslation/js/force_jquery.js',
+            '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.2/jquery-ui.min.js',
+            'modeltranslation/js/tabbed_translation_fields.js',
+        )
+        css = {
+            'all': ('modeltranslation/css/tabbed_translation_fields.css',),
+        }
 
 
 class TabbedExternalJqueryTranslationAdmin(TranslationAdmin):
+    """
+    Convenience class which includes the necessary media files for tabbed
+    translation fields. Loads recent jquery version from a cdn.
+    """
     class Media:
         js = (
-            '//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js',
-            '//ajax.googleapis.com/ajax/libs/jqueryui/1.10.2/jquery-ui.min.js',
+            '//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js',
+            '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.2/jquery-ui.min.js',
             'modeltranslation/js/tabbed_translation_fields.js',
         )
         css = {
             'screen': ('modeltranslation/css/tabbed_translation_fields.css',),
         }
+
+
+if django.VERSION < (1, 6):
+    TabbedTranslationAdmin = TabbedDjango15JqueryTranslationAdmin
+else:
+    TabbedTranslationAdmin = TabbedDjangoJqueryTranslationAdmin

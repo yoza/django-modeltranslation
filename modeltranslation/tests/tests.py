@@ -965,6 +965,10 @@ class ForeignKeyFieldsTest(ModeltranslationTestBase):
         self.assertEqual(manager.filter(test_fks__title='f_title_de').count(), 0)
         self.assertEqual(manager.filter(test_fks__title_de='f_title_de').count(), 1)
 
+    def test_indonesian(self):
+        field = models.ForeignKeyModel._meta.get_field('test')
+        self.assertNotEqual(field.attname, build_localized_fieldname(field.name, 'id'))
+
     def assertQuerysetsEqual(self, qs1, qs2):
         pk = lambda o: o.pk
         return self.assertEqual(sorted(qs1, key=pk), sorted(qs2, key=pk))
@@ -2563,6 +2567,27 @@ class TestManager(ModeltranslationTestBase):
         from modeltranslation.manager import MultilingualQuerySet
         qs = models.CustomManagerTestModel.objects.custom_qs()
         self.assertIsInstance(qs, MultilingualQuerySet)
+
+    def test_multilingual_queryset_pickling(self):
+        import pickle
+        from modeltranslation.manager import MultilingualQuerySet
+
+        # typical
+        models.CustomManagerTestModel.objects.create(title='a')
+        qs = models.CustomManagerTestModel.objects.all()
+        serialized = pickle.dumps(qs)
+        deserialized = pickle.loads(serialized)
+        self.assertIsInstance(deserialized, MultilingualQuerySet)
+        self.assertListEqual(list(qs), list(deserialized))
+
+        # Generated class
+        models.CustomManager2TestModel.objects.create()
+        qs = models.CustomManager2TestModel.objects.all()
+        serialized = pickle.dumps(qs)
+        deserialized = pickle.loads(serialized)
+        self.assertIsInstance(deserialized, MultilingualQuerySet)
+        self.assertIsInstance(deserialized, models.CustomQuerySet)
+        self.assertListEqual(list(qs), list(deserialized))
 
     def test_non_objects_manager(self):
         """Test if managers other than ``objects`` are patched too"""
