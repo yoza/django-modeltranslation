@@ -14,7 +14,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.core.management import call_command
 from django.db import IntegrityError
-from django.db.models import Q, F
+from django.db.models import Q, F, Count
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import override_settings
 from django.utils import six
@@ -42,7 +42,7 @@ models = translation = None
 request = None
 
 # How many models are registered for tests.
-TEST_MODELS = 28
+TEST_MODELS = 29
 
 
 class reload_override_settings(override_settings):
@@ -1442,6 +1442,28 @@ class OtherFieldsTest(ModeltranslationTestBase):
         self.assertEqual(datetime.time(1, 2, 3), inst.time_de)
         self.assertEqual(datetime.time(23, 42, 0), inst.time_en)
 
+    def test_dates_queryset(self):
+        Model = models.OtherFieldsModel
+
+        Model.objects.create(datetime=datetime.datetime(2015, 9, 2, 0, 0))
+        Model.objects.create(datetime=datetime.datetime(2014, 8, 3, 0, 0))
+        Model.objects.create(datetime=datetime.datetime(2013, 7, 4, 0, 0))
+
+        qs = Model.objects.dates('datetime', 'year', 'DESC')
+
+        if django.VERSION[:2] < (1, 6):
+            self.assertEqual(list(qs), [
+                datetime.datetime(2015, 1, 1, 0, 0),
+                datetime.datetime(2014, 1, 1, 0, 0),
+                datetime.datetime(2013, 1, 1, 0, 0)
+            ])
+        else:
+            self.assertEqual(list(qs), [
+                datetime.date(2015, 1, 1),
+                datetime.date(2014, 1, 1),
+                datetime.date(2013, 1, 1)
+            ])
+
     def test_descriptors(self):
         # Descriptor store ints in database and returns string of 'a' of that length
         inst = models.DescriptorModel()
@@ -2550,6 +2572,14 @@ class TestManager(ModeltranslationTestBase):
              'visits': 0, 'visits_en': 0, 'visits_de': 0,
              'description': None, 'description_en': None, 'description_de': None},
         ])
+
+    def test_values_list_annotation(self):
+        models.TestModel(title='foo').save()
+        models.TestModel(title='foo').save()
+        self.assertEqual(
+            list(models.TestModel.objects.all().values_list('title').annotate(Count('id'))),
+            [('foo', 2)]
+        )
 
     def test_custom_manager(self):
         """Test if user-defined manager is still working"""

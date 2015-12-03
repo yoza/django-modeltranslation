@@ -1,3 +1,33 @@
+v0.10.2
+=======
+Date: 2015-10-27
+
+  FIXED: Proxy model inheritance for Django >=1.8
+         (resolves issues #304, thanks Stratos Moros)
+
+
+v0.10.1
+=======
+Date: 2015-09-04
+
+  FIXED: FallbackValuesListQuerySet.iterator which broke ORM datetimes
+         (resolves issue #324, thanks Venelin Stoykov)
+
+
+v0.10.0
+=======
+Date: 2015-07-03
+
+  ADDED: CSS support for bi-directional languages to TranslationAdmin
+         using mt-bidi class.
+         (resolves issue #317, thanks oliphunt)
+  ADDED: A decorator to handle registration of models.
+         (resolves issue #318, thanks zenoamaro)
+
+  FIXED: Handled annotation fields when using values_list.
+         (resolves issue #321, thanks Lukas Lundgren)
+
+
 v0.9.1
 ======
 Date: 2015-05-14
