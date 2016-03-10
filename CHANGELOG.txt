@@ -1,3 +1,26 @@
+v0.11
+=====
+Date: 2016-01-31
+
+Released without changes.
+
+
+v0.11rc2
+========
+Date: 2015-12-15
+
+  FIXED: Custom manager in migrations.
+         (resolves issues #330, #339 and #350, thanks Jacek Tomaszewski)
+
+
+v0.11rc1
+========
+Date: 2015-12-07
+
+  ADDED: Support for Django 1.9
+         (resolves issue #349, thanks Jacek Tomaszewski)
+
+
 v0.10.2
 =======
 Date: 2015-10-27
